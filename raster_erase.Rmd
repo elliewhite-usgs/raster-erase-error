@@ -1,0 +1,89 @@
+---
+title: "raster_erase"
+output: html_document
+---
+
+# Data Gathering
+```{r basin_data}
+library(raster)
+# CDEC Basin locations 
+sptdf <- df <- read.csv("cdec_fnf_stations_data.csv", header=TRUE, stringsAsFactors=FALSE, fileEncoding="latin1")
+
+# keep df as a normal DataFrame for later use, and make spdf a SpatialPolygonsDataFrame
+coordinates(sptdf) <- ~LONGITUDE + LATITUDE
+proj4string(sptdf) <- CRS('+proj=longlat +datum=WGS84')
+
+library(rgdal)
+basins <- shapefile('catchment_all.shp')
+
+# delete the YBJ basin, YBM is the unimpaired one
+basins <- basins[basins@data$STATION!="YBJ",]
+
+# projections used for California
+tealalbers <- crs("+proj=aea +lat_1=34 +lat_2=40.5 +lat_0=0 +lon_0=-120 +x_0=0 +y_0=-4000000 +datum=NAD83 +units=km +ellps=GRS80")
+albers <- crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0")
+
+# transform to all to Albers
+sptdf <- spTransform(sptdf, albers)
+basins <- spTransform(basins, albers)
+
+# join the information on the stations to the SpatialPolygonsDataFrame
+basins@data <- merge(basins@data, sptdf, by.x= "STATION", by.y="CDEC_ID")
+```
+ 
+# Data Processing !!! ERROR IS HERE !!!  
+```{r basins_incremental}
+# to find the incremental basins subtract the upper watersheds from the bigger lower one. 
+# erase and subtract giving the following error: "Error in SpatialPolygonsDataFrame(part2, x@data[match(row.names(part2),  : row.names of data and Polygons IDs do not match"
+basins_inc <- basins
+for(b in basins$STATION){
+  basinabove1 <- basins@data[basins$STATION == b, "STATIONS_ABOVE1"]
+  basinabove2 <- basins@data[basins$STATION == b, "STATIONS_ABOVE2"]
+  basinabove3 <- basins@data[basins$STATION == b, "STATIONS_ABOVE3"]
+  if(basinabove1!="none"){
+    b_inc <- erase(basins_inc[basins_inc$STATION == b, ],  basins_inc[basins_inc$STATION == basinabove1, ])
+    if(basinabove2!="none"){
+      b_inc <- erase(b_inc, basins_inc[basins_inc$STATION == basinabove2, ])
+      if(basinabove3!="none"){
+        b_inc <- erase(b_inc, basins_inc[basins_inc$STATION == basinabove3, ])
+        } else{b_inc} 
+     } else{b_inc}
+  } else{b_inc <- basins_inc[basins_inc$STATION == b, ]}
+  b_inc2 <- b_inc
+  b_inc2@data$STATION <- paste0(b,"_INC")
+  basins_inc <- rbind(basins_inc, b_inc2)
+}
+
+# workaround: use gDifference, and retain the @data ttributes mannually
+library(rgeos)
+basins_inc <- basins
+for(b in basins$STATION){
+  basinabove1 <- basins@data[basins$STATION == b, "STATIONS_ABOVE1"]
+  basinabove2 <- basins@data[basins$STATION == b, "STATIONS_ABOVE2"]
+  basinabove3 <- basins@data[basins$STATION == b, "STATIONS_ABOVE3"]
+  if(basinabove1!="none"){
+    b_inc <- gDifference(basins_inc[basins_inc$STATION == b, ],  basins_inc[basins_inc$STATION == basinabove1, ])
+    # retain the attributes becasue we will need to rbind
+    poly_df <- basins_inc[basins_inc$STATION == b, ]@data
+    row.names(poly_df) <- 1
+    b_inc <- SpatialPolygonsDataFrame(b_inc, poly_df)
+    if(basinabove2!="none"){
+      b_inc <- gDifference(b_inc, basins_inc[basins_inc$STATION == basinabove2, ])
+      poly_df <- basins_inc[basins_inc$STATION == b, ]@data
+      row.names(poly_df) <- 1
+      b_inc <- SpatialPolygonsDataFrame(b_inc, poly_df)
+      if(basinabove3!="none"){
+        b_inc <- gDifference(b_inc, basins_inc[basins_inc$STATION == basinabove3, ])
+        poly_df <- basins_inc[basins_inc$STATION == b, ]@data
+        row.names(poly_df) <- 1
+        b_inc <- SpatialPolygonsDataFrame(b_inc, poly_df)
+        } else{b_inc} 
+     } else{b_inc}
+  } else{b_inc <- basins_inc[basins_inc$STATION == b, ]}
+  b_inc2 <- b_inc
+  b_inc2@data$STATION <- paste0(b,"_INC")
+  basins_inc <- rbind(basins_inc, b_inc2)
+}
+```
+
+
